@@ -8,6 +8,7 @@ const targetNamespace = 'olm-dev';
 
 // FIXME(alecmerdler): Use `fetch` with kubeconfig instead of shelling out to `kubectl`
 const packages = yaml.safeLoad(execSync(`kubectl get packagemanifests -n ${targetNamespace} -o json`));
+const subscriptions = yaml.safeLoad(execSync(`kubectl get subscriptions -n ${targetNamespace} -o json`));
 
 const subscriptionFor = (pkg) => {
   return {
@@ -25,7 +26,7 @@ const subscriptionFor = (pkg) => {
       startingCSV: pkg.status.channels[0].currentCSV,
     }
   }
-}
+};
 
 inquirer
   .prompt([
@@ -34,62 +35,73 @@ inquirer
       name: 'theme',
       message: 'What do you want to do?',
       choices: [
-        'List available Operator packages',
-        'Install an Operator package',
+        {name: 'List available Operator packages', value: 'listPackages'},
+        {name: 'Install an Operator package', value: 'installPackage'},
         new inquirer.Separator(),
-        {
-          name: 'Complain about OpenShift',
-          disabled: 'Unavailable at this time'
-        },
+        {name: 'Complain about OpenShift', disabled: 'Unavailable at this time'},
       ]
-    },
-    {
-      type: 'list',
-      name: 'package',
-      message: 'Which Operator do you want to install?',
-      choices: packages.items.map(pkg => pkg.status.channels[0].currentCSVDesc.displayName),
-      pageSize: 100,
-    },
-    {
-      type: 'confirm',
-      name: 'confirm',
-      message: 'Install this Operator?',
-      default: 'Y',
     }
   ])
   .then(answers => {
-    console.log(`====================
-${JSON.stringify(answers, null, '  ')}
-====================`);
-
-    const pkg = packages.items.find(pkg => pkg.status.channels[0].currentCSVDesc.displayName === answers.package);
-    if (answers.confirm) {
-      const sub = subscriptionFor(pkg);
-
-      const spinner = ora('Creating Operator subscription...').start();
-      new Promise(resolve => {
-        setTimeout(() => {
-          execSync(`echo '${JSON.stringify(sub)}' | kubectl create -n ${targetNamespace} -f -`);
-          resolve();
-        }, 3000);
-      }).then(() => new Promise(resolve => {
-        spinner.text = 'Installing Operator...';
-        spinner.color = 'white';
-        setTimeout(() => resolve(), 3000);
-      })).then(() => new Promise(resolve => {
-        spinner.text = 'Making you wait for no reason...';
-        spinner.color = 'gray';
-        setTimeout(() => resolve(), 10000);
-      })).then(() => {
-        spinner.succeed('Operator installed!');
-      }).then(() => new Promise(resolve => {
-        // setTimeout(() => resolve(), 15000);
-        // FIXME(alecmerdler): Cleanup for testing
-        // execSync(`kubectl delete subscription -n ${targetNamespace} ${sub.metadata.name}`);
-        // execSync(`kubectl delete clusterserviceversion -n ${targetNamespace} ${pkg.status.channels[0].currentCSV}`);
-        // console.log('Operator uninstalled!');
-      }));      
+    if (answers.theme === 'listPackages') {
+      packages.items.forEach(pkg => console.log(`${pkg.status.channels[0].currentCSVDesc.displayName}`));
+    } else if (answers.theme === 'installPackage') {
+      inquirer
+        .prompt([
+          {
+            type: 'list',
+            name: 'package',
+            message: 'Which Operator do you want to install?',
+            choices: packages.items.map(pkg => ({
+              name: pkg.status.channels[0].currentCSVDesc.displayName,
+              disabled: subscriptions.items.some(sub => sub.spec.name === pkg.status.packageName),
+            })),
+            pageSize: 100,
+          },
+          {
+            type: 'confirm',
+            name: 'confirm',
+            message: 'Install this Operator?',
+            default: 'Y',
+          }
+        ])
+        .then(answers => {      
+          const pkg = packages.items.find(pkg => pkg.status.channels[0].currentCSVDesc.displayName === answers.package);
+          if (answers.confirm) {
+            const sub = subscriptionFor(pkg);
+      
+            const spinner = ora('Creating Operator subscription...').start();
+            new Promise(resolve => {
+              setTimeout(() => {
+                execSync(`echo '${JSON.stringify(sub)}' | kubectl create -n ${targetNamespace} -f -`);
+                resolve();
+              }, 2000);
+            }).then(() => new Promise(resolve => {
+              spinner.text = 'Installing Operator...';
+              spinner.color = 'white';
+              setTimeout(() => resolve(), 2000);
+            })).then(() => new Promise(resolve => {
+              spinner.text = 'Making you wait for no reason...';
+              spinner.color = 'gray';
+              setTimeout(() => resolve(), 10000);
+            })).then(() => new Promise(resolve => {
+              spinner.text = 'Finishing up...';
+              spinner.color = 'cyan';
+              setTimeout(() => resolve(), 2000);
+            })).then(() => {
+              spinner.succeed('Operator installed!');
+            }).then(() => new Promise(resolve => {
+              // setTimeout(() => resolve(), 15000);
+              // FIXME(alecmerdler): Cleanup for testing
+              // execSync(`kubectl delete subscription -n ${targetNamespace} ${sub.metadata.name}`);
+              // execSync(`kubectl delete clusterserviceversion -n ${targetNamespace} ${pkg.status.channels[0].currentCSV}`);
+              // console.log('Operator uninstalled!');
+            }));      
+          } else {
+            console.log('No soup for you!');
+          }
+        })
     } else {
-      console.log('No soup for you!');
+      console.error(`Invalid option!`);
     }
   });
