@@ -1,12 +1,13 @@
 const inquirer = require('inquirer');
-const fetch = require('node-fetch');
-const fs = require('fs');
 const yaml = require('js-yaml');
+const ora = require('ora');
 const { execSync } = require('child_process');
 
-// FIXME(alecmerdler): Use `fetch` with kubeconfig instead of shelling out to `kubectl`
 // FIXME(alecmerdler): Accept namespace argument
-const packages = yaml.safeLoad(execSync(`kubectl get packagemanifests -n default -o json`));
+const targetNamespace = 'olm-dev';
+
+// FIXME(alecmerdler): Use `fetch` with kubeconfig instead of shelling out to `kubectl`
+const packages = yaml.safeLoad(execSync(`kubectl get packagemanifests -n ${targetNamespace} -o json`));
 
 const subscriptionFor = (pkg) => {
   return {
@@ -14,9 +15,6 @@ const subscriptionFor = (pkg) => {
     kind: 'Subscription', 
     metadata: {
       name: `install-${pkg.metadata.name}`,
-      labels: {
-        'olm-cli': true,
-      },
     },
     spec: {
       channel: pkg.status.channels[0].name,
@@ -64,12 +62,34 @@ inquirer
 ${JSON.stringify(answers, null, '  ')}
 ====================`);
 
-    const pkg = packages.items.find(pkg => pkg.metadata.name === answers.package);
+    const pkg = packages.items.find(pkg => pkg.status.channels[0].currentCSVDesc.displayName === answers.package);
     if (answers.confirm) {
-      // TODO(alecmerdler): Create subscription
       const sub = subscriptionFor(pkg);
-      console.log(sub);
+
+      const spinner = ora('Creating Operator subscription...').start();
+      new Promise(resolve => {
+        setTimeout(() => {
+          execSync(`echo '${JSON.stringify(sub)}' | kubectl create -n ${targetNamespace} -f -`);
+          resolve();
+        }, 3000);
+      }).then(() => new Promise(resolve => {
+        spinner.text = 'Installing Operator...';
+        spinner.color = 'white';
+        setTimeout(() => resolve(), 3000);
+      })).then(() => new Promise(resolve => {
+        spinner.text = 'Making you wait for no reason...';
+        spinner.color = 'gray';
+        setTimeout(() => resolve(), 10000);
+      })).then(() => {
+        spinner.succeed('Operator installed!');
+      }).then(() => new Promise(resolve => {
+        // setTimeout(() => resolve(), 15000);
+        // FIXME(alecmerdler): Cleanup for testing
+        // execSync(`kubectl delete subscription -n ${targetNamespace} ${sub.metadata.name}`);
+        // execSync(`kubectl delete clusterserviceversion -n ${targetNamespace} ${pkg.status.channels[0].currentCSV}`);
+        // console.log('Operator uninstalled!');
+      }));      
     } else {
-      // TODO(alecmerdler): Sad panda message...
+      console.log('No soup for you!');
     }
   });
